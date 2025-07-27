@@ -1,0 +1,270 @@
+import { createWebpackPlugin } from 'unplugin';
+import { getCompressedSize, normalizePath, red, checkNodeVersion, normalizeOptions, handleErrors, createSentryInstance, Output, telemetryPlugin } from '@codecov/bundler-plugin-core';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+
+const STRIP_CHARS_REGEX = /(\w|\[|]|\/)/g;
+const findFilenameFormat = ({
+  assetName,
+  filename,
+  assetModuleFilename,
+  chunkFilename,
+  cssFilename,
+  cssChunkFilename
+}) => {
+  const currAssetFormat = assetName.replaceAll(STRIP_CHARS_REGEX, "");
+  if (filename !== "" && currAssetFormat.includes(filename.replaceAll(STRIP_CHARS_REGEX, ""))) {
+    return filename;
+  }
+  if (chunkFilename !== "" && currAssetFormat.includes(chunkFilename.replaceAll(STRIP_CHARS_REGEX, ""))) {
+    return chunkFilename;
+  }
+  if (cssFilename !== "" && currAssetFormat.includes(cssFilename.replaceAll(STRIP_CHARS_REGEX, ""))) {
+    return cssFilename;
+  }
+  if (cssChunkFilename !== "" && currAssetFormat.includes(cssChunkFilename.replaceAll(STRIP_CHARS_REGEX, ""))) {
+    return cssChunkFilename;
+  }
+  if (assetModuleFilename !== "" && currAssetFormat.includes(
+    assetModuleFilename.replaceAll(STRIP_CHARS_REGEX, "")
+  )) {
+    return assetModuleFilename;
+  }
+  return "";
+};
+
+const processAssets = async ({
+  assets,
+  compilation,
+  metaFramework
+}) => {
+  const outputOptions = compilation.outputOptions;
+  const collectedAssets = [];
+  const filename = typeof outputOptions.filename === "string" ? outputOptions.filename : "";
+  const assetModuleFilename = typeof outputOptions.assetModuleFilename === "string" ? outputOptions.assetModuleFilename : "";
+  const chunkFilename = typeof outputOptions.chunkFilename === "string" ? outputOptions.chunkFilename : "";
+  const cssFilename = typeof outputOptions.cssFilename === "string" ? outputOptions.cssFilename : "";
+  const cssChunkFilename = typeof outputOptions.chunkFilename === "string" ? outputOptions.chunkFilename : "";
+  await Promise.all(
+    assets.map(async (asset) => {
+      const format = findFilenameFormat({
+        assetName: asset.name,
+        filename,
+        assetModuleFilename,
+        chunkFilename,
+        cssFilename,
+        cssChunkFilename
+      });
+      if (path.extname(asset.name) === ".map") {
+        return;
+      }
+      const currentAsset = compilation.getAsset(asset.name);
+      let compressedSize = null;
+      if (currentAsset) {
+        compressedSize = await getCompressedSize({
+          fileName: asset.name,
+          code: currentAsset.source.source()
+        });
+      }
+      collectedAssets.push({
+        name: asset.name,
+        size: asset.size,
+        gzipSize: compressedSize,
+        normalized: normalizePath(asset.name, format, metaFramework)
+      });
+    })
+  );
+  return collectedAssets;
+};
+
+const processChunks = ({ chunks, chunkIdMap }) => {
+  const referenceChunkMapById = /* @__PURE__ */ new Map();
+  chunks.forEach((chunk) => {
+    if (chunk.id) {
+      referenceChunkMapById.set(chunk.id.toString(), chunk);
+    }
+  });
+  return chunks.map((chunk, index) => {
+    const chunkId = chunk.id ?? "";
+    const uniqueId = `${index}-${chunkId}`;
+    chunkIdMap.set(chunkId, uniqueId);
+    const dynamicImports = [];
+    chunk.children?.forEach((child) => {
+      const childIdString = child.toString();
+      const childChunk = referenceChunkMapById.get(childIdString);
+      if (!childChunk || !childChunk.files) {
+        red(`Child chunk ${childIdString} not found in chunkMap`);
+      } else {
+        dynamicImports.push(...childChunk.files);
+      }
+    });
+    return {
+      id: chunk.id?.toString() ?? "",
+      uniqueId,
+      entry: chunk.entry,
+      initial: chunk.initial,
+      files: chunk.files ?? [],
+      names: chunk.names ?? [],
+      dynamicImports
+    };
+  });
+};
+
+const processModules = ({ modules, chunkIdMap }) => {
+  return modules.map((module) => {
+    const chunks = module.chunks ?? [];
+    const chunkUniqueIds = [];
+    chunks.forEach((chunk) => {
+      const chunkUniqueId = chunkIdMap.get(chunk);
+      if (chunkUniqueId) {
+        chunkUniqueIds.push(chunkUniqueId);
+      }
+    });
+    return {
+      name: module.name ?? "",
+      size: module.size ?? 0,
+      chunkUniqueIds
+    };
+  });
+};
+
+const webpackBundleAnalysisPlugin = ({
+  output,
+  pluginName,
+  pluginVersion
+}) => ({
+  version: output.version,
+  name: pluginName,
+  pluginVersion,
+  buildStart: () => {
+    output.start();
+    output.setPlugin(pluginName, pluginVersion);
+  },
+  buildEnd: () => {
+    output.end();
+  },
+  writeBundle: async () => {
+    await output.write();
+  },
+  webpack(compiler) {
+    const generatedRequire = createRequire(import.meta.url);
+    const webpack = generatedRequire("webpack");
+    compiler.hooks.thisCompilation.tap(pluginName, (compilation) => {
+      compilation.hooks.processAssets.tapPromise(
+        {
+          name: pluginName,
+          stage: webpack.Compilation.PROCESS_ASSETS_STAGE_REPORT
+        },
+        async () => {
+          output.setBundleName(output.originalBundleName);
+          if (typeof compilation.outputOptions.chunkFormat === "string") {
+            if (compilation.name && compilation.name !== "") {
+              output.setBundleName(`${output.bundleName}-${compilation.name}`);
+            }
+            let chunkFormat = compilation.outputOptions.chunkFormat;
+            if (chunkFormat === "commonjs") {
+              chunkFormat = "cjs";
+            } else if (chunkFormat === "module") {
+              chunkFormat = "esm";
+            }
+            output.setBundleName(`${output.bundleName}-${chunkFormat}`);
+          }
+          const compilationStats = compilation.getStats().toJson({
+            assets: true,
+            chunks: true,
+            modules: true,
+            builtAt: true,
+            hash: true
+          });
+          output.bundler = {
+            name: "webpack",
+            version: webpack.version
+          };
+          const outputOptions = compilation.outputOptions;
+          const { assets, chunks, modules } = compilationStats;
+          if (assets) {
+            const collectedAssets = await processAssets({
+              assets,
+              compilation,
+              metaFramework: output.metaFramework
+            });
+            output.assets = collectedAssets;
+          }
+          const chunkIdMap = /* @__PURE__ */ new Map();
+          if (chunks) {
+            output.chunks = processChunks({ chunks, chunkIdMap });
+          }
+          if (modules) {
+            output.modules = processModules({ modules, chunkIdMap });
+          }
+          output.duration = Date.now() - (output.builtAt ?? 0);
+          output.outputPath = outputOptions.path ?? "";
+          if (output.dryRun) {
+            const { RawSource } = webpack.sources;
+            compilation.emitAsset(
+              `${output.bundleName}-stats.json`,
+              new RawSource(output.bundleStatsToJson())
+            );
+          }
+        }
+      );
+    });
+  }
+});
+
+const PLUGIN_NAME = "@codecov/webpack-plugin";
+const PLUGIN_VERSION = "1.9.1";
+const codecovWebpackPluginFactory = createWebpackPlugin(
+  (userOptions, unpluginMetaContext) => {
+    if (checkNodeVersion(unpluginMetaContext)) {
+      return [];
+    }
+    const normalizedOptions = normalizeOptions(userOptions);
+    if (!normalizedOptions.success) {
+      const { shouldExit } = handleErrors(normalizedOptions);
+      if (shouldExit) {
+        process.exit(1);
+      }
+      return [];
+    }
+    const plugins = [];
+    const options = normalizedOptions.options;
+    const sentryConfig = createSentryInstance({
+      telemetry: options.telemetry,
+      isDryRun: options.dryRun,
+      pluginName: PLUGIN_NAME,
+      pluginVersion: PLUGIN_VERSION,
+      options,
+      bundler: unpluginMetaContext.framework
+    });
+    const output = new Output(
+      options,
+      { metaFramework: unpluginMetaContext.framework },
+      sentryConfig
+    );
+    if (options.enableBundleAnalysis) {
+      plugins.push(
+        telemetryPlugin({
+          sentryClient: sentryConfig.sentryClient,
+          sentryScope: sentryConfig.sentryScope,
+          telemetry: options.telemetry
+        }),
+        webpackBundleAnalysisPlugin({
+          output,
+          pluginName: PLUGIN_NAME,
+          pluginVersion: PLUGIN_VERSION
+        })
+      );
+    }
+    return plugins;
+  }
+);
+const codecovWebpackPlugin = codecovWebpackPluginFactory;
+const _internal_webpackBundleAnalysisPlugin = webpackBundleAnalysisPlugin;
+const _internal_findFilenameFormat = findFilenameFormat;
+const _internal_processAssets = processAssets;
+const _internal_processChunks = processChunks;
+const _internal_processModules = processModules;
+
+export { _internal_findFilenameFormat, _internal_processAssets, _internal_processChunks, _internal_processModules, _internal_webpackBundleAnalysisPlugin, codecovWebpackPlugin };
+//# sourceMappingURL=index.mjs.map

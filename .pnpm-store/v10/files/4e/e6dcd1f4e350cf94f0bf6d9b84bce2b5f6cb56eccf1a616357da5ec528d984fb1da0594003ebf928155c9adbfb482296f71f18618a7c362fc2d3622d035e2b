@@ -1,0 +1,2 @@
+/// <amd-module name="@ngneat/dirty-check-forms" />
+export * from './index';
