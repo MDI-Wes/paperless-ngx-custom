@@ -1,0 +1,115 @@
+import { StatsModule, StatsChunk, StatsAsset, Compilation } from 'webpack';
+import * as _codecov_bundler_plugin_core from '@codecov/bundler-plugin-core';
+import { MetaFramework, Options } from '@codecov/bundler-plugin-core';
+import { WebpackPluginInstance } from 'unplugin';
+
+interface ProcessChunksArgs$1 {
+    modules: StatsModule[];
+    chunkIdMap: Map<number | string, string>;
+}
+
+interface ProcessChunksArgs {
+    chunks: StatsChunk[];
+    chunkIdMap: Map<number | string, string>;
+}
+
+interface ProcessAssetsArgs {
+    assets: StatsAsset[];
+    compilation: Compilation;
+    metaFramework: MetaFramework;
+}
+
+interface FindFilenameFormatArgs {
+    assetName: string;
+    filename: string;
+    assetModuleFilename: string;
+    chunkFilename: string;
+    cssFilename: string;
+    cssChunkFilename: string;
+}
+
+/**
+ * Details for the Codecov Webpack plugin.
+ *
+ * @example
+ * ```typescript
+ * // webpack.config.js
+ * const path = require("path");
+ * const { codecovWebpackPlugin } = require("@codecov/webpack-plugin");
+ *
+ * module.exports = {
+ *   entry: "./src/index.js",
+ *   mode: "production",
+ *   output: {
+ *     filename: "main.js",
+ *     path: path.resolve(__dirname, "dist"),
+ *   },
+ *   plugins: [
+ *     // Put the Codecov vite plugin after all other plugins
+ *     codecovWebpackPlugin({
+ *       enableBundleAnalysis: true,
+ *       bundleName: "example-webpack-bundle",
+ *       gitService: "github",
+ *     }),
+ *    ],
+ * };
+ * ```
+ *
+ * @see {@link @codecov/bundler-plugin-core!Options | Options} for list of options.
+ */
+declare const codecovWebpackPlugin: (options: Options) => WebpackPluginInstance;
+/**
+ * Do not use this plugin directly. For internal use only.
+ *
+ * Used to expose the webpack bundle analysis unplugin plugin that can be combined with other
+ * plugins to create a single plugin for a given meta-framework.
+ *
+ * @internal
+ */
+declare const _internal_webpackBundleAnalysisPlugin: _codecov_bundler_plugin_core.BundleAnalysisUploadPlugin;
+/**
+ * Do not use this plugin directly. For internal use only.
+ *
+ * Used to find the filename format for a given compilation.
+ *
+ * @internal
+ */
+declare const _internal_findFilenameFormat: ({ assetName, filename, assetModuleFilename, chunkFilename, cssFilename, cssChunkFilename, }: FindFilenameFormatArgs) => string;
+/**
+ * Do not use this plugin directly. For internal use only.
+ *
+ * Used to process webpack assets in other plugins.
+ *
+ * @internal
+ */
+declare const _internal_processAssets: ({ assets, compilation, metaFramework, }: ProcessAssetsArgs) => Promise<_codecov_bundler_plugin_core.Asset[]>;
+/**
+ * Do not use this plugin directly. For internal use only.
+ *
+ * Used to process webpack chunks in other plugins.
+ *
+ * @internal
+ */
+declare const _internal_processChunks: ({ chunks, chunkIdMap }: ProcessChunksArgs) => {
+    id: string;
+    uniqueId: string;
+    entry: boolean;
+    initial: boolean;
+    files: string[];
+    names: string[];
+    dynamicImports: string[];
+}[];
+/**
+ * Do not use this plugin directly. For internal use only.
+ *
+ * Used to process webpack modules in other plugins.
+ *
+ * @internal
+ */
+declare const _internal_processModules: ({ modules, chunkIdMap }: ProcessChunksArgs$1) => {
+    name: string;
+    size: number;
+    chunkUniqueIds: string[];
+}[];
+
+export { _internal_findFilenameFormat, _internal_processAssets, _internal_processChunks, _internal_processModules, _internal_webpackBundleAnalysisPlugin, codecovWebpackPlugin };

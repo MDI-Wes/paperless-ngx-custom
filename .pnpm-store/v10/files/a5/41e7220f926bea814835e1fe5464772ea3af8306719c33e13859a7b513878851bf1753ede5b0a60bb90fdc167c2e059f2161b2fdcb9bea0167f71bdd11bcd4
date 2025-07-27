@@ -1,0 +1,10 @@
+import { AbstractControl } from '@angular/forms';
+import { Observable } from 'rxjs';
+interface DirtyCheckConfig<U = unknown> {
+    debounce?: number;
+    withDisabled?: boolean;
+    useBeforeunloadEvent?: boolean;
+    excludeKeys?: Array<keyof U>;
+}
+export declare function dirtyCheck<U, Config extends U extends object ? DirtyCheckConfig<U> : Omit<DirtyCheckConfig<U>, 'excludeKeys'>>(control: AbstractControl, source: Observable<U>, config?: Config): Observable<boolean>;
+export {};

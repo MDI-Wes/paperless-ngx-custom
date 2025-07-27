@@ -1,0 +1,115 @@
+import { of, defer, merge, Observable, combineLatest, fromEvent } from 'rxjs';
+import { switchMap, take, debounceTime, distinctUntilChanged, map, startWith, shareReplay, withLatestFrom } from 'rxjs/operators';
+import { FormGroup, FormArray } from '@angular/forms';
+import omit from 'lodash-es/omit';
+
+function isFunction(value) {
+    return typeof value === 'function';
+}
+function isObservable(value) {
+    return value && isFunction(value.subscribe);
+}
+function toObservable(source) {
+    return isObservable(source) ? source : of(source);
+}
+
+class DirtyCheckGuard {
+    canDeactivate(component, currentRoute) {
+        let dirty$;
+        const componentDirty = component.isDirty$;
+        if (isFunction(componentDirty)) {
+            dirty$ = defer(() => toObservable(componentDirty()));
+        }
+        else {
+            dirty$ = toObservable(componentDirty);
+        }
+        return dirty$.pipe(switchMap((isDirty) => {
+            if (isDirty === false) {
+                return of(true);
+            }
+            return toObservable(this.confirmChanges(currentRoute));
+        }), take(1));
+    }
+}
+
+function equal(a, b) {
+    if (a === b)
+        return true;
+    if (a && b && typeof a == 'object' && typeof b == 'object') {
+        if (a.constructor !== b.constructor)
+            return false;
+        let length, i;
+        if (Array.isArray(a)) {
+            length = a.length;
+            if (length != b.length)
+                return false;
+            for (i = length; i-- !== 0;)
+                if (!equal(a[i], b[i]))
+                    return false;
+            return true;
+        }
+        if (a.constructor === RegExp)
+            return a.source === b.source && a.flags === b.flags;
+        if (a.valueOf !== Object.prototype.valueOf)
+            return a.valueOf() === b.valueOf();
+        if (a.toString !== Object.prototype.toString)
+            return a.toString() === b.toString();
+        const keys = Object.keys(a);
+        length = keys.length;
+        if (length !== Object.keys(b).length)
+            return false;
+        for (i = length; i-- !== 0;)
+            if (!Object.prototype.hasOwnProperty.call(b, keys[i]))
+                return false;
+        for (i = length; i-- !== 0;) {
+            const key = keys[i];
+            if (!equal(a[key], b[key]))
+                return false;
+        }
+        return true;
+    }
+    return a !== a && b !== b;
+}
+
+const defaults = {
+    debounce: 300,
+    withDisabled: true,
+    useBeforeunloadEvent: true,
+};
+function getControlValue(control, withDisabled) {
+    if (withDisabled &&
+        (control instanceof FormGroup || control instanceof FormArray)) {
+        return control.getRawValue();
+    }
+    return control.value;
+}
+function dirtyCheck(control, source, config = {}) {
+    const { debounce, withDisabled, useBeforeunloadEvent, excludeKeys } = Object.assign(Object.assign({}, defaults), config);
+    const value = () => getControlValue(control, withDisabled);
+    const valueChanges$ = merge(defer(() => of(value())), control.valueChanges.pipe(debounceTime(debounce), distinctUntilChanged(), map(() => value())));
+    return new Observable((observer) => {
+        const isDirty$ = combineLatest([
+            source,
+            valueChanges$,
+        ]).pipe(map(([a, b]) => {
+            if (excludeKeys) {
+                return !equal(omit(a, excludeKeys), omit(b, excludeKeys));
+            }
+            return !equal(a, b);
+        }), startWith(false), shareReplay({ bufferSize: 1, refCount: true }));
+        if (useBeforeunloadEvent) {
+            observer.add(fromEvent(window, 'beforeunload')
+                .pipe(withLatestFrom(isDirty$))
+                .subscribe(([event, isDirty]) => {
+                if (isDirty) {
+                    event.preventDefault();
+                    event.returnValue = false;
+                }
+            }));
+        }
+        return isDirty$.subscribe(observer);
+    });
+}
+
+export { DirtyCheckGuard, dirtyCheck };
+//# sourceMappingURL=ngneat-dirty-check-forms.mjs.map

@@ -1,0 +1,7 @@
+import { ActivatedRouteSnapshot, CanDeactivate } from '@angular/router';
+import { Observable } from 'rxjs';
+import { DirtyComponent } from './dirty-component';
+export declare abstract class DirtyCheckGuard implements CanDeactivate<DirtyComponent> {
+    canDeactivate(component: DirtyComponent, currentRoute: ActivatedRouteSnapshot): Observable<boolean>;
+    abstract confirmChanges(currentRoute: ActivatedRouteSnapshot): Observable<boolean> | boolean;
+}
