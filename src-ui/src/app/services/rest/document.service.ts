@@ -185,6 +185,14 @@ export class DocumentService extends AbstractPaperlessService<Document> {
     return url
   }
 
+  getDownloadWithNotesUrl(id: number): string {
+    return this.getResourceUrl(id, 'download_with_notes')
+  }
+
+  getDownloadWithNotesFilesUrl(id: number): string {
+    return this.getResourceUrl(id, 'download_with_notes_files')
+  }
+
   getNextAsn(): Observable<number> {
     return this.http.get<number>(this.getResourceUrl(null, 'next_asn'))
   }

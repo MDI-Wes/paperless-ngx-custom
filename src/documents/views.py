@@ -389,6 +389,14 @@ class DocumentTypeViewSet(ModelViewSet, PermissionsAwareDocumentCountMixin):
         ],
         responses={200: OpenApiTypes.BINARY},
     ),
+    download_with_notes=extend_schema(
+        description="Download the document with notes included as a text file",
+        responses={200: OpenApiTypes.BINARY},
+    ),
+    download_with_notes_files=extend_schema(
+        description="Download both the original document and a separate notes file as a ZIP archive",
+        responses={200: OpenApiTypes.BINARY},
+    ),
     history=extend_schema(
         description="View the document history",
         responses={
@@ -834,6 +842,207 @@ class DocumentViewSet(
     def download(self, request, pk=None):
         try:
             return self.file_response(pk, request, "attachment")
+        except (FileNotFoundError, Document.DoesNotExist):
+            raise Http404
+
+    @action(methods=["get"], detail=True)
+    def download_with_notes(self, request, pk=None):
+        try:
+            doc = Document.objects.select_related("owner").prefetch_related("notes__user").get(id=pk)
+            if request.user is not None and not has_perms_owner_aware(
+                request.user,
+                "view_document",
+                doc,
+            ):
+                return HttpResponseForbidden("Insufficient permissions")
+
+            # Get the original document content
+            original_response = self.file_response(pk, request, "attachment")
+
+            # If the document is not a text file, we'll create a text file with notes
+            if not doc.mime_type.startswith('text/'):
+                # Create a text file with document info and notes
+                content_parts = []
+
+                # Document header
+                content_parts.append(f"Document: {doc.title}")
+                content_parts.append(f"Created: {doc.created}")
+                content_parts.append(f"Added: {doc.added}")
+                if doc.correspondent:
+                    content_parts.append(f"Correspondent: {doc.correspondent.name}")
+                if doc.document_type:
+                    content_parts.append(f"Document Type: {doc.document_type.name}")
+                if doc.tags.exists():
+                    tag_names = [tag.name for tag in doc.tags.all()]
+                    content_parts.append(f"Tags: {', '.join(tag_names)}")
+                content_parts.append("")
+
+                # Document content (if available)
+                if doc.content:
+                    content_parts.append("DOCUMENT CONTENT:")
+                    content_parts.append("=" * 50)
+                    content_parts.append(doc.content)
+                    content_parts.append("=" * 50)
+                    content_parts.append("")
+
+                # Notes section
+                if doc.notes.exists():
+                    content_parts.append("NOTES:")
+                    content_parts.append("=" * 50)
+                    for note in doc.notes.all():
+                        content_parts.append(f"Note ID: {note.id}")
+                        content_parts.append(f"Created: {note.created}")
+                        content_parts.append(f"Creator: {note.user.username if note.user else 'Unknown'}")
+                        content_parts.append(f"Content: {note.note}")
+                        content_parts.append("-" * 30)
+                    content_parts.append("=" * 50)
+                else:
+                    content_parts.append("NOTES: None")
+
+                # Create the text file
+                content = "\n".join(content_parts)
+                filename = f"{doc.title}_with_notes.txt"
+
+                # Normalize filename for safe download
+                filename_normalized = (
+                    normalize("NFKD", filename.replace(",", "_"))
+                    .encode("ascii", "ignore")
+                    .decode("ascii")
+                )
+
+                response = HttpResponse(content, content_type="text/plain; charset=utf-8")
+                response["Content-Disposition"] = f'attachment; filename="{filename_normalized}"'
+                return response
+            else:
+                # For text files, append notes to the original content
+                original_content = original_response.content.decode('utf-8')
+
+                # Get notes
+                notes_content = []
+                if doc.notes.exists():
+                    notes_content.append("\n\nNOTES:")
+                    notes_content.append("=" * 50)
+                    for note in doc.notes.all():
+                        notes_content.append(f"Note ID: {note.id}")
+                        notes_content.append(f"Created: {note.created}")
+                        notes_content.append(f"Creator: {note.user.username if note.user else 'Unknown'}")
+                        notes_content.append(f"Content: {note.note}")
+                        notes_content.append("-" * 30)
+                    notes_content.append("=" * 50)
+
+                # Combine original content with notes
+                combined_content = original_content + "\n".join(notes_content)
+
+                # Create response with combined content
+                filename = doc.get_public_filename()
+                if not filename.endswith('_with_notes'):
+                    filename = filename.replace('.txt', '_with_notes.txt')
+
+                # Normalize filename for safe download
+                filename_normalized = (
+                    normalize("NFKD", filename.replace(",", "_"))
+                    .encode("ascii", "ignore")
+                    .decode("ascii")
+                )
+
+                response = HttpResponse(combined_content, content_type="text/plain; charset=utf-8")
+                response["Content-Disposition"] = f'attachment; filename="{filename_normalized}"'
+                return response
+
+        except (FileNotFoundError, Document.DoesNotExist):
+            raise Http404
+
+    @action(methods=["get"], detail=True)
+    def download_with_notes_files(self, request, pk=None):
+        """
+        Download both the original document and a separate notes file as a ZIP archive.
+        """
+        try:
+            doc = Document.objects.select_related("owner").prefetch_related("notes__user").get(id=pk)
+            if request.user is not None and not has_perms_owner_aware(
+                request.user,
+                "view_document",
+                doc,
+            ):
+                return HttpResponseForbidden("Insufficient permissions")
+
+            import zipfile
+            import tempfile
+            import io
+
+            # Create a temporary ZIP file in memory
+            zip_buffer = io.BytesIO()
+
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add the original document to the ZIP
+                original_response = self.file_response(pk, request, "attachment")
+                original_filename = doc.get_public_filename()
+
+                # Get the original file content
+                if doc.storage_type == Document.STORAGE_TYPE_GPG:
+                    from documents.storage import GnuPG
+                    file_handle = GnuPG.decrypted(doc.source_file)
+                else:
+                    file_handle = doc.source_file
+
+                zipf.writestr(original_filename, file_handle.read())
+
+                # Create notes file content
+                notes_content_parts = []
+                notes_content_parts.append(f"Document: {doc.title}")
+                notes_content_parts.append(f"Document ID: {doc.id}")
+                notes_content_parts.append(f"Created: {doc.created}")
+                notes_content_parts.append(f"Added: {doc.added}")
+                if doc.correspondent:
+                    notes_content_parts.append(f"Correspondent: {doc.correspondent.name}")
+                if doc.document_type:
+                    notes_content_parts.append(f"Document Type: {doc.document_type.name}")
+                if doc.tags.exists():
+                    tag_names = [tag.name for tag in doc.tags.all()]
+                    notes_content_parts.append(f"Tags: {', '.join(tag_names)}")
+                notes_content_parts.append("")
+
+                # Add notes
+                if doc.notes.exists():
+                    notes_content_parts.append("NOTES:")
+                    notes_content_parts.append("=" * 50)
+                    for note in doc.notes.all():
+                        notes_content_parts.append(f"Note ID: {note.id}")
+                        notes_content_parts.append(f"Created: {note.created}")
+                        notes_content_parts.append(f"Creator: {note.user.username if note.user else 'Unknown'}")
+                        notes_content_parts.append(f"Content: {note.note}")
+                        notes_content_parts.append("-" * 30)
+                    notes_content_parts.append("=" * 50)
+                else:
+                    notes_content_parts.append("NOTES: None")
+
+                notes_content = "\n".join(notes_content_parts)
+                notes_filename = f"{doc.title}_notes.txt"
+
+                # Normalize notes filename for safe storage in ZIP
+                notes_filename_normalized = (
+                    normalize("NFKD", notes_filename.replace(",", "_"))
+                    .encode("ascii", "ignore")
+                    .decode("ascii")
+                )
+
+                zipf.writestr(notes_filename_normalized, notes_content)
+
+            # Prepare the response
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer.getvalue(), content_type="application/zip")
+
+            # Create a safe filename for the ZIP
+            zip_filename = f"{doc.title}_with_notes.zip"
+            zip_filename_normalized = (
+                normalize("NFKD", zip_filename.replace(",", "_"))
+                .encode("ascii", "ignore")
+                .decode("ascii")
+            )
+
+            response["Content-Disposition"] = f'attachment; filename="{zip_filename_normalized}"'
+            return response
+
         except (FileNotFoundError, Document.DoesNotExist):
             raise Http404
 

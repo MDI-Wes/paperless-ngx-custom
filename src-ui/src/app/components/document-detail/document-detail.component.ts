@@ -174,8 +174,7 @@ export enum ZoomSetting {
 })
 export class DocumentDetailComponent
   extends ComponentWithPermissions
-  implements OnInit, OnDestroy, DirtyComponent
-{
+  implements OnInit, OnDestroy, DirtyComponent {
   @ViewChild('inputTitle')
   titleInput: TextComponent
 
@@ -410,9 +409,8 @@ export class DocumentDetailComponent
               this.previewText = res.toString()
             },
             error: (err) => {
-              this.previewText = $localize`An error occurred loading content: ${
-                err.message ?? err.toString()
-              }`
+              this.previewText = $localize`An error occurred loading content: ${err.message ?? err.toString()
+                }`
             },
           })
           this.thumbUrl = this.documentsService.getThumbUrl(documentId)
@@ -449,7 +447,7 @@ export class DocumentDetailComponent
                 this.documentForm.get('permissions_form').value['owner']
               openDocument['permissions'] =
                 this.documentForm.get('permissions_form').value[
-                  'set_permissions'
+                'set_permissions'
                 ]
               delete openDocument['permissions_form']
             }
@@ -819,7 +817,7 @@ export class DocumentDetailComponent
 
   save(close: boolean = false) {
     this.networkActive = true
-    ;(document.activeElement as HTMLElement)?.dispatchEvent(new Event('change'))
+      ; (document.activeElement as HTMLElement)?.dispatchEvent(new Event('change'))
     this.documentsService
       .patch(this.getChangedFields())
       .pipe(first())
@@ -1061,6 +1059,53 @@ export class DocumentDetailComponent
       })
   }
 
+  downloadWithNotes() {
+    this.downloading = true
+    const downloadUrl = this.documentsService.getDownloadWithNotesFilesUrl(
+      this.documentId
+    )
+    this.http
+      .get(downloadUrl, { observe: 'response', responseType: 'blob' })
+      .subscribe({
+        next: (response: HttpResponse<Blob>) => {
+          const contentDisposition = response.headers.get('Content-Disposition')
+          const filename =
+            getFilenameFromContentDisposition(contentDisposition) ||
+            `${this.document.title}_with_notes.zip`
+          const blob = new Blob([response.body], {
+            type: response.body.type,
+          })
+          this.downloading = false
+          const file = new File([blob], filename, {
+            type: response.body.type,
+          })
+          if (
+            !this.deviceDetectorService.isDesktop() &&
+            navigator.canShare &&
+            navigator.canShare({ files: [file] })
+          ) {
+            navigator.share({
+              files: [file],
+            })
+          } else {
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = filename
+            a.click()
+            URL.revokeObjectURL(url)
+          }
+        },
+        error: (error) => {
+          this.downloading = false
+          this.toastService.showError(
+            $localize`Error downloading document with notes`,
+            error
+          )
+        },
+      })
+  }
+
   hasNext() {
     return this.documentListViewService.hasNext(this.documentId)
   }
@@ -1145,7 +1190,7 @@ export class DocumentDetailComponent
     this.previewZoomScale = ZoomSetting.PageWidth
     this.previewZoomSetting =
       Object.values(ZoomSetting)[
-        Math.min(Object.values(ZoomSetting).length - 1, currentIndex + 1)
+      Math.min(Object.values(ZoomSetting).length - 1, currentIndex + 1)
       ]
   }
 
